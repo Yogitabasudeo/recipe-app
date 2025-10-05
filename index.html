@@ -1,0 +1,193 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Recipe Finder (Spoonacular)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; margin:0; background:#f5f7fb; color:#111; }
+    .container { max-width:1000px; margin:20px auto; padding:16px; }
+    header { display:flex; justify-content:space-between; align-items:center; }
+    .controls { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; }
+    input[type=text] { padding:8px; font-size:16px; width:300px; }
+    button { padding:8px 12px; cursor:pointer; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; margin-top:16px; }
+    .card { background:white; border-radius:8px; padding:12px; box-shadow:0 1px 4px rgba(0,0,0,0.08); }
+    .card img { width:100%; height:150px; object-fit:cover; border-radius:6px; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:12px; background:#eee; font-size:12px; margin-right:6px; }
+    .fav { background:#ffe6e6; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; }
+    .modal .inner { background:white; padding:16px; border-radius:8px; max-width:720px; width:calc(100% - 40px); max-height:80vh; overflow:auto; }
+    @media (max-width:600px){ input[type=text]{width:100%} .grid{grid-template-columns:repeat(1,1fr)} }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Recipe Finder</h1>
+      <div>
+        <button id="darkToggle">Dark</button>
+      </div>
+    </header>
+
+    <div class="controls">
+      <input type="text" id="queryInput" placeholder="Search by dish name (eg: pasta, pancakes)" />
+      <input type="text" id="ingredientsInput" placeholder="Or list ingredients comma-separated (eg: egg, milk, tomato)" />
+      <button id="searchBtn">Search</button>
+      <button id="favBtn">Favorites</button>
+    </div>
+
+    <div id="message" style="margin-top:10px;color:#666"></div>
+    <div id="results" class="grid" aria-live="polite"></div>
+  </div>
+
+  <script src="spoonacular_config.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <div id="root" style="display:none"></div>
+
+  <script>
+  // Minimal React-like rendering for simplicity is embedded directly in index.html.
+  // But to keep it simple and self-contained we'll implement using plain DOM + small helpers.
+  (function(){
+    const API_KEY = window.SPOONACULAR_API_KEY || "";
+    const messageEl = document.getElementById('message');
+    const resultsEl = document.getElementById('results');
+    const queryInput = document.getElementById('queryInput');
+    const ingredientsInput = document.getElementById('ingredientsInput');
+    const searchBtn = document.getElementById('searchBtn');
+    const favBtn = document.getElementById('favBtn');
+
+    let favorites = JSON.parse(localStorage.getItem('rf_favorites') || "[]");
+
+    function setMessage(txt, danger){
+      messageEl.textContent = txt || "";
+      messageEl.style.color = danger ? 'crimson' : '#666';
+    }
+
+    function saveFavorites(){ localStorage.setItem('rf_favorites', JSON.stringify(favorites)); }
+
+    function createCard(recipe, onOpen){
+      const div = document.createElement('div');
+      div.className = 'card';
+      const img = document.createElement('img');
+      img.src = recipe.image || '';
+      img.alt = recipe.title || 'Recipe';
+      div.appendChild(img);
+      const h = document.createElement('h3'); h.textContent = recipe.title || 'Untitled';
+      div.appendChild(h);
+      const p = document.createElement('p'); p.textContent = recipe.summary ? (recipe.summary.replace(/<[^>]*>/g,'').slice(0,140)+'...') : '';
+      div.appendChild(p);
+      const btn = document.createElement('button'); btn.textContent = 'Open';
+      btn.onclick = ()=> onOpen(recipe);
+      div.appendChild(btn);
+      const fav = document.createElement('button'); fav.style.marginLeft='8px';
+      const isFav = favorites.find(f=>f.id===recipe.id);
+      fav.textContent = isFav ? 'Unsave' : 'Save';
+      fav.onclick = (e)=>{ e.stopPropagation(); if(isFav){ favorites = favorites.filter(f=>f.id!==recipe.id); fav.textContent='Save'; } else { favorites.push(recipe); fav.textContent='Unsave'; } saveFavorites(); }
+      div.appendChild(fav);
+      return div;
+    }
+
+    async function openRecipe(recipe){
+      // fetch recipe details via Spoonacular information endpoint
+      if(!API_KEY){ setMessage('Please add your Spoonacular API key in spoonacular_config.js', true); return; }
+      setMessage('Loading recipe...');
+      try{
+        const resp = await fetch(`https://api.spoonacular.com/recipes/${recipe.id}/information?includeNutrition=true&apiKey=${API_KEY}`);
+        if(!resp.ok){ throw new Error('API error '+resp.status); }
+        const data = await resp.json();
+        showModal(data);
+        setMessage('');
+      } catch(err){
+        setMessage('Failed to fetch recipe details: '+err.message, true);
+      }
+    }
+
+    function showModal(data){
+      const modal = document.createElement('div'); modal.className='modal';
+      const inner = document.createElement('div'); inner.className='inner';
+      const title = document.createElement('h2'); title.textContent = data.title || 'Recipe';
+      inner.appendChild(title);
+      if(data.image){ const im = document.createElement('img'); im.src = data.image; im.style.width='100%'; im.style.borderRadius='6px'; inner.appendChild(im); }
+      if(data.extendedIngredients){
+        const h3 = document.createElement('h4'); h3.textContent='Ingredients'; inner.appendChild(h3);
+        const ul = document.createElement('ul');
+        data.extendedIngredients.forEach(ing => { const li = document.createElement('li'); li.textContent = ing.original; ul.appendChild(li); });
+        inner.appendChild(ul);
+      }
+      if(data.instructions){
+        const h4 = document.createElement('h4'); h4.textContent='Instructions'; inner.appendChild(h4);
+        const div = document.createElement('div'); div.innerHTML = data.instructions;
+        inner.appendChild(div);
+      } else if(data.analyzedInstructions && data.analyzedInstructions.length){
+        const h4 = document.createElement('h4'); h4.textContent='Instructions'; inner.appendChild(h4);
+        data.analyzedInstructions[0].steps.forEach(s=>{
+          const p = document.createElement('p'); p.textContent = s.number + '. ' + s.step; inner.appendChild(p);
+        });
+      }
+      const close = document.createElement('button'); close.textContent='Close'; close.onclick=()=>document.body.removeChild(modal);
+      inner.appendChild(close);
+      modal.appendChild(inner);
+      document.body.appendChild(modal);
+    }
+
+    async function search(){
+      resultsEl.innerHTML=''; setMessage('Searching...');
+      const q = queryInput.value.trim();
+      const ing = ingredientsInput.value.trim();
+      if(!API_KEY){ setMessage('Please add your Spoonacular API key in spoonacular_config.js', true); return; }
+      try{
+        let url = '';
+        if(q){
+          const params = new URLSearchParams({query:q, number:12, addRecipeInformation:true, apiKey:API_KEY});
+          url = 'https://api.spoonacular.com/recipes/complexSearch?' + params.toString();
+        } else if(ing){
+          // find by ingredients returns different shape
+          const params = new URLSearchParams({ingredients: ing, number:12, apiKey:API_KEY});
+          url = 'https://api.spoonacular.com/recipes/findByIngredients?' + params.toString();
+        } else {
+          setMessage('Enter a dish name or ingredients to search.', true);
+          return;
+        }
+        const resp = await fetch(url);
+        if(!resp.ok){ throw new Error('API error '+resp.status); }
+        const data = await resp.json();
+        let results = [];
+        if(Array.isArray(data)){ // findByIngredients returns array
+          results = data.map(d=>({ id: d.id, title: d.title, image: d.image }));
+        } else {
+          results = (data.results || []).map(d=>({ id: d.id, title: d.title, image: d.image, summary: d.summary }));
+        }
+        if(results.length===0){ setMessage('No recipes found.'); return; }
+        setMessage('');
+        results.forEach(r=> resultsEl.appendChild(createCard(r, openRecipe)));
+      } catch(err){
+        setMessage('Search failed: '+err.message, true);
+      }
+    }
+
+    function showFavorites(){
+      resultsEl.innerHTML=''; setMessage('Favorites:');
+      if(!favorites.length){ setMessage('No favorites saved.'); return; }
+      favorites.forEach(r=> resultsEl.appendChild(createCard(r, openRecipe)));
+    }
+
+    searchBtn.addEventListener('click', search);
+    favBtn.addEventListener('click', showFavorites);
+    // Enter key
+    [queryInput, ingredientsInput].forEach(inp=> inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter') search(); }));
+
+    // Dark toggle simple
+    document.getElementById('darkToggle').addEventListener('click', function(){
+      if(document.body.style.background === 'black'){ document.body.style.background='#f5f7fb'; document.body.style.color='#111'; this.textContent='Dark'; }
+      else { document.body.style.background='black'; document.body.style.color='white'; this.textContent='Light'; }
+    });
+
+    // initial message
+    setMessage('Ready. Enter a dish name or ingredients to search.');
+  })();
+  </script>
+</body>
+</html>
